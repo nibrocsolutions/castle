@@ -1,0 +1,17 @@
+services:
+  feldstein:
+    build: .
+    image: feldstein:latest
+    container_name: feldstein
+    ports:
+      - "8096:8096"
+    volumes:
+      - feldstein-data:/data
+    environment:
+      DATA_DIR: /data
+      PORT: "8096"
+      TZ: America/New_York
+    restart: unless-stopped
+
+volumes:
+  feldstein-data:
