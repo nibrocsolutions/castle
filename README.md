@@ -16,7 +16,13 @@ cd castle
 docker compose up -d --build
 ```
 
-On the phone, join the same Wi-Fi as the machine and open `http://<host-ip>:8096`.
+On the phone, join the same Wi-Fi as the machine and open `http://<host-ip>:8096`. The phone does not get its own build. After you pull, rebuild this same container and reload the tab:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+Safari on an iPhone plays the shots from that page. The first tap clicks. The ring/silent switch has to be off, or the page stays quiet. While the page is open, the side buttons set the game volume.
 
 Add it to the home screen (Safari: Share → Add to Home Screen, Chrome: menu → Add to Home screen) and it opens like an app.
 
@@ -99,8 +105,8 @@ The socket expects JSON: `move` and `aim` are each `[x, y]` from -1 to 1, `press
 
 - Anyone who can open the address can play, and anyone who can open `/api/admin/summary` can read the counts. Keep it on your home network. Do not forward port 8096 to the internet.
 - The phone has to reach the machine. On the same Wi-Fi, use that machine's address.
-- Progress lives in SQLite. The phone only remembers the player id and whether German barks are spoken.
-- The page does not load fonts, pictures, castles, or sound files from the internet. Shots, footsteps, locks, doors, and blasts are synthesized on the phone after the first tap. A mute switch on the phone silences them. German barks use the phone's own voice when it has one, and a shout plays either way. The words are also printed on the room.
+- Progress lives in SQLite. The phone only remembers the player id, whether sound is on, and whether German barks are spoken.
+- The page does not load fonts, pictures, castles, or sound files from the internet. Shots, footsteps, locks, doors, and blasts are synthesized on the phone. Safari will not play them until a tap starts the speaker, and the iPhone mute switch silences them even then. German barks use the phone's own voice when it has one, and a shout plays either way. The words are also printed on the room.
 - The image is the multi-arch `python:3.12-slim` image, so it runs on a 64-bit Raspberry Pi and on a normal PC.
 
 ## What this was built from

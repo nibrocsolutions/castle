@@ -23,6 +23,10 @@ let pending = [];
 let audioCtx = null;
 let master = null;
 let noiseCache = null;
+let keeper = null;
+let speaker = null;
+let audioPrimed = false;
+let claimedAt = 0;
 let lastStepAt = 0;
 let lastPickAt = 0;
 let loopStarted = false;
@@ -105,64 +109,184 @@ function send() {
 
 setInterval(send, 80);
 
-function unlockAudio() {
-  const Context = window.AudioContext || window.webkitAudioContext;
-  if (!Context) return;
-  if (!audioCtx) {
-    audioCtx = new Context();
-    master = audioCtx.createGain();
-    master.gain.value = 0.6;
-    master.connect(audioCtx.destination);
-    const rate = audioCtx.sampleRate;
-    noiseCache = audioCtx.createBuffer(1, rate, rate);
-    const data = noiseCache.getChannelData(0);
-    for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+function clickWav() {
+  const rate = 22050;
+  const count = 1400;
+  const bytes = 44 + count * 2;
+  const buffer = new ArrayBuffer(bytes);
+  const view = new DataView(buffer);
+  const write = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  write(0, "RIFF");
+  view.setUint32(4, bytes - 8, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, count * 2, true);
+  for (let i = 0; i < count; i += 1) {
+    const env = (1 - i / count) ** 2;
+    const sample = Math.sin((2 * Math.PI * 740 * i) / rate) * env * 0.85;
+    view.setInt16(44 + i * 2, sample * 32767, true);
   }
-  if (audioCtx.state === "suspended") return audioCtx.resume();
+  return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+}
+
+function unlockAudio(event) {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!Context) return Promise.resolve();
+  try {
+    if (!audioCtx) {
+      audioCtx = new Context();
+      master = audioCtx.createGain();
+      master.gain.value = soundOn ? 0.9 : 0;
+      master.connect(audioCtx.destination);
+    } else if (master) {
+      master.gain.value = soundOn ? 0.9 : 0;
+    }
+    // Safari stays silent until a buffer is started inside the tap itself.
+    if (audioCtx.state !== "running") {
+      const silent = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+      const poke = audioCtx.createBufferSource();
+      poke.buffer = silent;
+      poke.connect(audioCtx.destination);
+      poke.start();
+    }
+    if (!keeper) {
+      const quiet = audioCtx.createGain();
+      quiet.gain.value = 0.00001;
+      keeper = audioCtx.createOscillator();
+      keeper.frequency.value = 20;
+      keeper.connect(quiet);
+      quiet.connect(audioCtx.destination);
+      keeper.start();
+    }
+    if (!speaker) {
+      speaker = document.createElement("audio");
+      speaker.setAttribute("playsinline", "");
+      speaker.setAttribute("webkit-playsinline", "");
+      speaker.preload = "auto";
+      speaker.src = clickWav();
+      speaker.volume = soundOn ? 0.5 : 0;
+      document.body.appendChild(speaker);
+    }
+    const kind = event && event.type;
+    const gesture = !kind || kind === "touchend" || kind === "click" || kind === "keydown";
+    let heard = false;
+    if (!audioPrimed && gesture && performance.now() - claimedAt > 40) {
+      claimedAt = performance.now();
+      speaker.currentTime = 0;
+      const played = speaker.play();
+      if (played && played.catch) played.catch(() => {});
+      if (soundOn) blip();
+      heard = true;
+    }
+    const pending = (audioCtx.state === "suspended" || audioCtx.state === "interrupted")
+      ? audioCtx.resume()
+      : Promise.resolve();
+    return Promise.resolve(pending).then(() => {
+      if (heard && audioCtx && audioCtx.state === "running") audioPrimed = true;
+    });
+  } catch (_error) {
+    /* The room still plays if this phone blocks the speaker. */
+  }
   return Promise.resolve();
 }
 
+document.addEventListener("touchstart", unlockAudio, true);
+document.addEventListener("touchend", unlockAudio, true);
 document.addEventListener("pointerdown", unlockAudio, true);
+document.addEventListener("click", unlockAudio, true);
 document.addEventListener("keydown", unlockAudio, true);
 
 function liveAudio() {
-  return soundOn && audioCtx && master && audioCtx.state === "running";
+  if (!soundOn || !audioCtx || !master || audioCtx.state === "closed") return false;
+  if (audioCtx.state !== "running") {
+    try {
+      audioCtx.resume();
+    } catch (_error) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function shaped(duration, peak) {
   const gain = audioCtx.createGain();
   const now = audioCtx.currentTime;
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), now + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + Math.max(0.03, duration));
+  const end = now + Math.max(0.05, duration);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(peak, now + 0.012);
+  gain.gain.linearRampToValueAtTime(0, end);
   gain.connect(master);
   return gain;
 }
 
+function blip() {
+  const now = audioCtx.currentTime;
+  const oscillator = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  oscillator.type = "square";
+  oscillator.frequency.setValueAtTime(740, now);
+  oscillator.frequency.linearRampToValueAtTime(360, now + 0.07);
+  gain.gain.setValueAtTime(0.35, now);
+  gain.gain.linearRampToValueAtTime(0, now + 0.07);
+  oscillator.connect(gain);
+  gain.connect(audioCtx.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.08);
+}
+
+function noiseBuffer() {
+  if (noiseCache) return noiseCache;
+  const rate = audioCtx.sampleRate;
+  noiseCache = audioCtx.createBuffer(1, rate, rate);
+  const data = noiseCache.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+  return noiseCache;
+}
+
 function noise(seconds, freq, q, peak) {
   if (!liveAudio()) return;
-  const source = audioCtx.createBufferSource();
-  source.buffer = noiseCache;
-  source.loop = true;
-  const filter = audioCtx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = freq;
-  filter.Q.value = q;
-  source.connect(filter);
-  filter.connect(shaped(seconds, peak));
-  source.start();
-  source.stop(audioCtx.currentTime + seconds);
+  try {
+    const source = audioCtx.createBufferSource();
+    source.buffer = noiseBuffer();
+    source.loop = true;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = freq;
+    filter.Q.value = q;
+    source.connect(filter);
+    filter.connect(shaped(seconds, peak));
+    const now = audioCtx.currentTime;
+    source.start(now);
+    source.stop(now + seconds);
+  } catch (_error) {
+    /* A failed effect should not stall the next one. */
+  }
 }
 
 function tone(freq, duration, type, peak, slide) {
   if (!liveAudio()) return;
-  const oscillator = audioCtx.createOscillator();
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
-  if (slide) oscillator.frequency.exponentialRampToValueAtTime(slide, audioCtx.currentTime + duration);
-  oscillator.connect(shaped(duration, peak));
-  oscillator.start();
-  oscillator.stop(audioCtx.currentTime + duration + 0.02);
+  try {
+    const now = audioCtx.currentTime;
+    const oscillator = audioCtx.createOscillator();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(freq, now);
+    if (slide) oscillator.frequency.linearRampToValueAtTime(slide, now + Math.max(0.05, duration));
+    oscillator.connect(shaped(duration, peak));
+    oscillator.start(now);
+    oscillator.stop(now + duration + 0.02);
+  } catch (_error) {
+    /* A failed effect should not stall the next one. */
+  }
 }
 
 function gunshot() {
@@ -335,7 +459,7 @@ function renderHome() {
         <p>Ordinary sentries give up when you hold a pistol on them. Storm guards wear pale vests and do not. A coat from a chest fools the ordinary ones until you draw.</p>
         <p>Use searches a body, spends a key, or keeps picking a lock while held. Shooting a chest hurries the lock and wakes the room. Some chests are explosives.</p>
         <p>You carry ten rounds and three grenades. Bumping a wall stuns you. The left stick moves, the right stick aims.</p>
-        <p>Keyboard: WASD, arrow keys, J to fire, E to use, G for a grenade, H to holster. Shots, steps, and blasts play from the phone after you tap. If the room is silent, the phone's mute switch is on.</p>
+        <p>Keyboard: WASD, arrow keys, J to fire, E to use, G for a grenade, H to holster. The first tap clicks. On an iPhone the mute switch silences the page, and the side volume buttons change this page only while it is open.</p>
       </section>
       <div class="row">
         <button class="quiet" type="button" id="sound">${soundOn ? "Sound on" : "Sound off"}</button>
@@ -369,9 +493,8 @@ function renderHome() {
   app.querySelector("#sound").addEventListener("click", () => {
     soundOn = !soundOn;
     localStorage.setItem(SOUND_KEY, soundOn ? "1" : "0");
-    Promise.resolve(unlockAudio()).then(() => {
-      if (soundOn) gunshot();
-    });
+    unlockAudio();
+    if (soundOn) gunshot();
     renderHome();
   });
   app.querySelector("#voice").addEventListener("click", () => {
