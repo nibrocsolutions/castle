@@ -1,0 +1,17 @@
+{
+  "name": "Feldstein",
+  "short_name": "Feldstein",
+  "description": "Find the war plans and leave the castle.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16130f",
+  "theme_color": "#16130f",
+  "icons": [
+    {
+      "src": "/static/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
