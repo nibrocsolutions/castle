@@ -1,6 +1,7 @@
 const app = document.querySelector("#app");
 const PLAYER_KEY = "feldstein-player";
 const VOICE_KEY = "feldstein-voice";
+const SOUND_KEY = "feldstein-sound";
 const BARKS = new Set(["Halt!", "Kamerad!", "Schweinhund!", "Mein Leben!"]);
 
 let playerId = null;
@@ -9,6 +10,7 @@ let screen = "boot";
 let runId = null;
 let chosenRank = null;
 let voiceOn = localStorage.getItem(VOICE_KEY) !== "0";
+let soundOn = localStorage.getItem(SOUND_KEY) !== "0";
 let ws = null;
 let socketGen = 0;
 let snaps = [];
@@ -19,6 +21,10 @@ let stickAim = [0, 0];
 const keys = new Set();
 let pending = [];
 let audioCtx = null;
+let master = null;
+let noiseCache = null;
+let lastStepAt = 0;
+let lastPickAt = 0;
 let loopStarted = false;
 
 function esc(value) {
@@ -99,39 +105,155 @@ function send() {
 
 setInterval(send, 80);
 
+function unlockAudio() {
+  const Context = window.AudioContext || window.webkitAudioContext;
+  if (!Context) return;
+  if (!audioCtx) {
+    audioCtx = new Context();
+    master = audioCtx.createGain();
+    master.gain.value = 0.6;
+    master.connect(audioCtx.destination);
+    const rate = audioCtx.sampleRate;
+    noiseCache = audioCtx.createBuffer(1, rate, rate);
+    const data = noiseCache.getChannelData(0);
+    for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+  }
+  if (audioCtx.state === "suspended") return audioCtx.resume();
+  return Promise.resolve();
+}
+
+document.addEventListener("pointerdown", unlockAudio, true);
+document.addEventListener("keydown", unlockAudio, true);
+
+function liveAudio() {
+  return soundOn && audioCtx && master && audioCtx.state === "running";
+}
+
+function shaped(duration, peak) {
+  const gain = audioCtx.createGain();
+  const now = audioCtx.currentTime;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + Math.max(0.03, duration));
+  gain.connect(master);
+  return gain;
+}
+
+function noise(seconds, freq, q, peak) {
+  if (!liveAudio()) return;
+  const source = audioCtx.createBufferSource();
+  source.buffer = noiseCache;
+  source.loop = true;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = freq;
+  filter.Q.value = q;
+  source.connect(filter);
+  filter.connect(shaped(seconds, peak));
+  source.start();
+  source.stop(audioCtx.currentTime + seconds);
+}
+
+function tone(freq, duration, type, peak, slide) {
+  if (!liveAudio()) return;
+  const oscillator = audioCtx.createOscillator();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) oscillator.frequency.exponentialRampToValueAtTime(slide, audioCtx.currentTime + duration);
+  oscillator.connect(shaped(duration, peak));
+  oscillator.start();
+  oscillator.stop(audioCtx.currentTime + duration + 0.02);
+}
+
+function gunshot() {
+  noise(0.14, 1800, 0.7, 0.95);
+  tone(220, 0.09, "square", 0.28, 80);
+}
+
+function guardShot() {
+  noise(0.1, 1100, 0.8, 0.55);
+  tone(160, 0.08, "square", 0.16, 70);
+}
+
+function boom() {
+  noise(0.48, 240, 0.5, 1);
+  tone(90, 0.4, "sine", 0.55, 40);
+}
+
+function footstep() {
+  noise(0.045, 280, 0.4, 0.28);
+}
+
+function doorSound() {
+  noise(0.16, 700, 0.6, 0.45);
+  tone(180, 0.14, "triangle", 0.22, 90);
+}
+
+function lockTick() {
+  tone(980, 0.035, "square", 0.16);
+}
+
+function thud() {
+  tone(95, 0.2, "sine", 0.5, 50);
+}
+
+function clink() {
+  tone(1600, 0.09, "square", 0.22);
+  tone(2300, 0.07, "sine", 0.12);
+}
+
+function dryFire() {
+  tone(240, 0.05, "square", 0.22);
+}
+
+function shout() {
+  tone(280, 0.16, "sawtooth", 0.28, 180);
+  tone(540, 0.1, "square", 0.1);
+}
+
 function speak(text) {
   if (!voiceOn || !BARKS.has(text) || !window.speechSynthesis) return;
   const utterance = new SpeechSynthesisUtterance(text.replace("!", ""));
   utterance.lang = "de-DE";
   utterance.rate = 0.95;
+  utterance.volume = 1;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 }
 
-function tone(freq, duration, type, gain) {
-  try {
-    if (!audioCtx) audioCtx = new AudioContext();
-    const oscillator = audioCtx.createOscillator();
-    const amp = audioCtx.createGain();
-    oscillator.type = type;
-    oscillator.frequency.value = freq;
-    amp.gain.value = gain;
-    oscillator.connect(amp);
-    amp.connect(audioCtx.destination);
-    oscillator.start();
-    amp.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-    oscillator.stop(audioCtx.currentTime + duration);
-  } catch (_error) {
-    /* The room still plays with the speaker off. */
-  }
-}
-
 function noteSounds(previous, view) {
-  if (!previous || previous.room_id !== view.room_id) return;
-  if (view.player.bullets < previous.player.bullets) tone(540, 0.06, "square", 0.04);
-  if (view.player.grenades < previous.player.grenades) tone(140, 0.2, "sawtooth", 0.05);
-  if (view.blasts.length > previous.blasts.length) tone(70, 0.28, "triangle", 0.06);
-  if (previous.player.stun === 0 && view.player.stun > 0) tone(880, 0.12, "square", 0.03);
+  if (!previous) return;
+  const sameRoom = previous.room_id === view.room_id;
+  if (!sameRoom) doorSound();
+  if (view.player.bullets < previous.player.bullets) gunshot();
+  if (view.player.grenades < previous.player.grenades) noise(0.09, 500, 0.4, 0.35);
+  const seen = new Set(previous.projectiles.map((shot) => shot.id));
+  const guardFired = view.projectiles.some((shot) => (
+    shot.kind === "bullet" && !seen.has(shot.id) && view.player.bullets >= previous.player.bullets
+  ));
+  if (guardFired) guardShot();
+  if (view.blasts.length > previous.blasts.length) boom();
+  if (previous.player.stun === 0 && view.player.stun > 0) thud();
+  if (previous.player.vest && !view.player.vest) clink();
+  if (sameRoom) {
+    const moved = Math.hypot(view.player.x - previous.player.x, view.player.y - previous.player.y);
+    if (moved > 0.08 && performance.now() - lastStepAt > 280) {
+      lastStepAt = performance.now();
+      footstep();
+    }
+  }
+  if (view.picking && (!previous.picking || view.picking.progress > previous.picking.progress + 0.12)) {
+    if (performance.now() - lastPickAt > 160) {
+      lastPickAt = performance.now();
+      lockTick();
+    }
+  }
+  if (view.say_seq !== previous.say_seq) {
+    if (view.say === "The pistol is empty." || view.say === "No grenades.") dryFire();
+    if (view.say === "The key turns." || view.say === "The door gives.") doorSound();
+    if (view.say_kind === "bark") shout();
+  }
+  if (previous.status === "playing" && view.status === "dead" && view.death !== "explosive") thud();
 }
 
 async function boot() {
@@ -213,9 +335,10 @@ function renderHome() {
         <p>Ordinary sentries give up when you hold a pistol on them. Storm guards wear pale vests and do not. A coat from a chest fools the ordinary ones until you draw.</p>
         <p>Use searches a body, spends a key, or keeps picking a lock while held. Shooting a chest hurries the lock and wakes the room. Some chests are explosives.</p>
         <p>You carry ten rounds and three grenades. Bumping a wall stuns you. The left stick moves, the right stick aims.</p>
-        <p>Keyboard: WASD, arrow keys, J to fire, E to use, G for a grenade, H to holster.</p>
+        <p>Keyboard: WASD, arrow keys, J to fire, E to use, G for a grenade, H to holster. Shots, steps, and blasts play from the phone after you tap. If the room is silent, the phone's mute switch is on.</p>
       </section>
       <div class="row">
+        <button class="quiet" type="button" id="sound">${soundOn ? "Sound on" : "Sound off"}</button>
         <button class="quiet" type="button" id="voice">${voiceOn ? "German voices on" : "German voices off"}</button>
         <button class="quiet" type="button" id="forget">Forget this name</button>
       </div>
@@ -242,6 +365,14 @@ function renderHome() {
     } catch (error) {
       app.querySelector("#err").textContent = error.message;
     }
+  });
+  app.querySelector("#sound").addEventListener("click", () => {
+    soundOn = !soundOn;
+    localStorage.setItem(SOUND_KEY, soundOn ? "1" : "0");
+    Promise.resolve(unlockAudio()).then(() => {
+      if (soundOn) gunshot();
+    });
+    renderHome();
   });
   app.querySelector("#voice").addEventListener("click", () => {
     voiceOn = !voiceOn;

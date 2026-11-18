@@ -100,7 +100,7 @@ The socket expects JSON: `move` and `aim` are each `[x, y]` from -1 to 1, `press
 - Anyone who can open the address can play, and anyone who can open `/api/admin/summary` can read the counts. Keep it on your home network. Do not forward port 8096 to the internet.
 - The phone has to reach the machine. On the same Wi-Fi, use that machine's address.
 - Progress lives in SQLite. The phone only remembers the player id and whether German barks are spoken.
-- The page does not load fonts, pictures, or castles from the internet. After the container is built, a round can be played with the machine offline. Barks use the phone's own German voice, if it has one. The words are also printed on the room.
+- The page does not load fonts, pictures, castles, or sound files from the internet. Shots, footsteps, locks, doors, and blasts are synthesized on the phone after the first tap. A mute switch on the phone silences them. German barks use the phone's own voice when it has one, and a shout plays either way. The words are also printed on the room.
 - The image is the multi-arch `python:3.12-slim` image, so it runs on a 64-bit Raspberry Pi and on a normal PC.
 
 ## What this was built from
