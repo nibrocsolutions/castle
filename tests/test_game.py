@@ -220,6 +220,58 @@ def test_pockets_hold_ten_rounds_and_three_grenades():
     assert give(state, "grenade", 1) == "No room for a grenade."
 
 
+def test_a_first_shot_from_the_cell_is_not_a_guaranteed_death():
+    quiet = {"move": [0, 0], "aim": [0, -1], "pressed": [], "use": False}
+    deaths = 0
+    for seed in range(24):
+        state = generate_castle(0, seed)
+        for _ in range(20):
+            step(state, quiet, 0.1)
+        step(state, {**quiet, "pressed": ["fire"]}, 0.1)
+        for _ in range(10):
+            step(state, quiet, 0.1)
+        if state["status"] != "playing":
+            deaths += 1
+    assert deaths < 8
+
+
+def test_a_sentry_at_arm_length_can_still_shoot_you():
+    state = scratch_state()
+    state["rooms"]["0,0,0"]["guards"].append(
+        {
+            "id": 4,
+            "x": 5.5,
+            "y": 4.5,
+            "home": [5.5, 4.5],
+            "home_facing": 3.14,
+            "kind": "guard",
+            "hp": 2,
+            "max_hp": 2,
+            "facing": 3.14,
+            "state": "alert",
+            "patrol": [],
+            "pi": 0,
+            "stuck": 0,
+            "cooldown": 0,
+            "surrender_t": 0,
+            "giveup": 2,
+            "alert_for": 5,
+            "searched": False,
+            "loot": [],
+            "said_halt": True,
+            "said_give": False,
+            "said_ss": False,
+        }
+    )
+    state["player"].update(x=4.5, y=4.5, holstered=True)
+    for _ in range(25):
+        step(state, {"move": [0, 0], "aim": [0, 0], "pressed": [], "use": False}, 0.1)
+        if state["status"] == "dead":
+            break
+    assert state["status"] == "dead"
+    assert state["death"] == "bullet"
+
+
 def test_a_generated_castle_can_be_stepped():
     state = generate_castle(0, 3)
     cmd = {"move": [0.2, -1], "aim": [0, -1], "pressed": [], "use": False}

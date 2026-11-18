@@ -663,8 +663,11 @@ def _update_guard(state: dict, room: dict, guard: dict, dt: float) -> None:
         guard["facing"] = math.atan2(player["y"] - guard["y"], player["x"] - guard["x"])
         return
     if _sees(room, guard, player):
+        newly = guard["state"] != "alert"
         guard["state"] = "alert"
         guard["alert_for"] = max(float(guard["alert_for"]), 5.0)
+        if newly:
+            guard["cooldown"] = max(float(guard["cooldown"]), 0.7)
         if not guard["said_halt"]:
             guard["said_halt"] = True
             if guard["kind"] == "ss":
@@ -725,7 +728,10 @@ def _maybe_shoot(state: dict, guard: dict, player: dict) -> None:
         return
     guard["cooldown"] = 0.95 if guard["kind"] == "ss" else 1.15
     aim = math.atan2(player["y"] - guard["y"], player["x"] - guard["x"])
-    aim += _rng(state).uniform(-0.1, 0.1)
+    dist = max(0.4, _distance(guard, player))
+    # A shot from across the room scatters. A shot in your face usually does not.
+    spread = 0.03 + dist * 0.12
+    aim += _rng(state).uniform(-spread, spread)
     _spawn_bullet(state, guard["x"], guard["y"], aim, "guard")
 
 
@@ -754,7 +760,9 @@ def _sees(room: dict, guard: dict, player: dict) -> bool:
         return diff < 1.05 and dist < 1.2
     if disguised and not player["holstered"]:
         return dist < 2.3 or diff < 0.7
-    if dist < 1.15:
+    if dist < 0.7:
+        return True
+    if dist < 1.25 and diff < 1.15:
         return True
     cone = 1.2 if guard["state"] == "alert" else 0.7
     return diff < cone
@@ -775,8 +783,11 @@ def _alert(state: dict, duration: float) -> None:
     for guard in _room(state)["guards"]:
         if guard["state"] in {"dead", "surrender"}:
             continue
+        newly = guard["state"] != "alert"
         guard["state"] = "alert"
         guard["alert_for"] = max(float(guard.get("alert_for", 0.0)), duration)
+        if newly:
+            guard["cooldown"] = max(float(guard.get("cooldown", 0.0)), 0.7)
 
 
 def _open_door(state: dict, door: dict) -> None:
